@@ -1,3 +1,4 @@
+from importlib.metadata import metadata
 import re
 import os
 import random
@@ -21,7 +22,7 @@ class BNCDatasetReader:
         self.bnc_corpus_reader = BNCCorpusReader(
             root=BNCDatasetReader.__ROOT, fileids=file_range_regex, lazy=False)
 
-    def ReadFilesInputAndOutputToJson(self, dir_path=""):
+    def ReadFilesInputAndOutput(self, dir_path=""):
         message_set = []
         dir_path_absolute = os.path.join(BNCDatasetReader.__ROOT, dir_path)
 
@@ -30,51 +31,21 @@ class BNCDatasetReader:
             file_path_absolute = os.path.join(dir_path_absolute, filename)
 
             if os.path.isdir(file_path_absolute):
-                messages_from_sub_folder = self.ReadFilesInputAndOutputToJson(
+                messages_from_sub_folder = self.ReadFilesInputAndOutput(
                     file_path)
                 if (messages_from_sub_folder):
                     message_set.extend(messages_from_sub_folder)
             elif self.xml_finder.match(file_path) and os.path.isfile(file_path_absolute):
-                sents_in_message, domain, title = self.RetriveMessageAndWordFromFileForJson(
+                sents_in_message, domain, title = self.RetriveMessageAndWordFromFile(
                     file_path)
                 metadata = {'domain': domain,'title': title, 'fileName': file_path}
                 message = {'sentenses': sents_in_message}
                 message_set.append({'metadata': metadata, 'message': message}) 
 
         return message_set
-    
-    def ReadFilesInput(self, dir_path=""):
-        message_set = []
-        complete_word_list = []
-        dir_path_absolute = os.path.join(BNCDatasetReader.__ROOT, dir_path)
-
-        for filename in os.listdir(dir_path_absolute):
-            file_path = os.path.join(dir_path, filename)
-            file_path_absolute = os.path.join(dir_path_absolute, filename)
-
-            if os.path.isdir(file_path_absolute):
-                messages_from_sub_folder, word_list_from_sub_folder = self.ReadFilesInput(
-                    file_path)
-                message_set.extend(messages_from_sub_folder)
-                complete_word_list.extend(word_list_from_sub_folder)
-            elif self.xml_finder.match(file_path) and os.path.isfile(file_path_absolute):
-                sents_in_message, domain = self.RetriveMessageAndWordFromFile(
-                    file_path)
-                message_set.append((sents_in_message, domain))
-                complete_word_list.extend(sents_in_message)
-
-        return message_set, complete_word_list
-
-    # TODO: Couple tag of speech with word
+        
     # TODO: Do freq analysis for each domain
     def RetriveMessageAndWordFromFile(self, path):
-        domain_match = self.domain_finder.search(
-            self.bnc_corpus_reader.raw(path))
-        sents_in_message = BNCDatasetReader.CleanWordsList(self.bnc_corpus_reader.words(fileids=path))
-        # In British National Corpus, there is only one domain in one file. We ignore the files that don't have domain for the training set
-        return sents_in_message, domain_match.group() if domain_match else 'unknown'
-    
-    def RetriveMessageAndWordFromFileForJson(self, path):
         domain_match = self.domain_finder.search(
             self.bnc_corpus_reader.raw(path))
         title = self.bnc_corpus_reader.xml(path)[0][0][0][0].text
@@ -91,37 +62,21 @@ class BNCDatasetReader:
 
 #TODO: Tf-idf or Log Tf-idf
 class FeaturesetCreater:
-    def BagOfWordVectorization(self, message_set, word_list):
+    def BagOfWordVectorization(self, message_set):
         vectorized_list = []
-        word_dict = FeaturesetCreater.CreateCompleteWordDict(word_list)
-
-        for words, label in FeaturesetCreater.BalanceDataByOverSampling(message_set):
+        word_dict = FeaturesetCreater.CreateCompleteWordDict(message_set)
+        sentenses_to_domain_list = [(message['message']['sentenses'], message['metadata']['domain']) for message in message_set]
+        for sentenses, label in sentenses_to_domain_list:
             vector_dict = dict.fromkeys(word_dict.keys(), 0)
-            for word in words:
-                if word in word_dict:
-                    vector_dict[word] = 1
-            vectorized_list.append((vector_dict, label))
-        return vectorized_list
-    
-    def BagOfWordVectorization(self, message_set, word_list):
-        vectorized_list = []
-        word_dict = FeaturesetCreater.CreateCompleteWordDict(word_list)
-
-        for words, label in FeaturesetCreater.BalanceDataByOverSampling(message_set):
-            vector_dict = dict.fromkeys(word_dict.keys(), 0)
-            for word in words:
-                if word in word_dict:
-                    vector_dict[word] = 1
+            for sentense in sentenses:
+                for word in sentense:
+                    word_pos_tuple = (word[0], word[1])
+                    if word_pos_tuple in word_dict:
+                        vector_dict[word_pos_tuple] = 1
             vectorized_list.append((vector_dict, label))
         return vectorized_list
 
-    def CreateBowVectorizedFeatureset(self, message_set, word_list, test_size=0.2):
-        vectorized_message_set = self.BagOfWordVectorization(
-            message_set, word_list)
-        random.shuffle(vectorized_message_set)
-        return vectorized_message_set[(int)(test_size * len(vectorized_message_set)):], vectorized_message_set[:(int)(test_size * len(vectorized_message_set))]
-
-    def CreateBowVectorizedFeaturesetWithPos(self, message_set, test_size=0.2):
+    def CreateBowVectorizedFeatureset(self, message_set, test_size=0.2):
         vectorized_message_set = self.BagOfWordVectorization(
             message_set)
         random.shuffle(vectorized_message_set)
@@ -147,26 +102,23 @@ class FeaturesetCreater:
         return list
 
     @staticmethod
-    def CreateCompleteWordDict(word_list):
-        return FreqDist(word_list)
+    def CreateCompleteWordDict(message_set):
+        return FreqDist((word[0], word[1]) for message in message_set for sentense in message['message']['sentenses'] for word in sentense)      
 
 def main():
     setup_module()
-    dataset_reader = BNCDatasetReader(file_range_regex='[A-D]\/\w+\/\w+\.xml')
-    # message_set = dataset_reader.ReadFilesInputAndOutputToJson()
+    # dataset_reader = BNCDatasetReader(file_range_regex='[A-D]\/\w+\/\w+\.xml')
+    # message_set = dataset_reader.ReadFilesInputAndOutput()
     # with open('A_D.json', 'w') as output:
     #     json.dump(message_set, output)
-    with open('A_D.json', 'r') as input:
+    with open('A.json', 'r') as input:
         data = input.read()
     message_set = json.loads(data)
     featureset_creater = FeaturesetCreater()
     
-    # message_set, complete_word_list_with_dup = dataset_reader.ReadFilesInput()
-    train, test = featureset_creater.CreateBowVectorizedFeaturesetWithPos(
+    train, test = featureset_creater.CreateBowVectorizedFeatureset(
         message_set, test_size=0.15)
     print("Number of data points: {}".format(len(message_set)))
-    # print("Number of features: {}".format(
-    #     len(FeaturesetCreater.CreateCompleteWordDict(complete_word_list_with_dup))))
     classifier = NaiveBayesClassifier.train(train)
 
     print(classifier.show_most_informative_features())
