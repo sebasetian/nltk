@@ -1,0 +1,6 @@
+.DS_Store
+A_D.json
+A.json
+env/
+.vscode/
+__pycache__
